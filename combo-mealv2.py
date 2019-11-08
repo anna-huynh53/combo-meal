@@ -12,12 +12,13 @@ yellow = "\033[1;33;49m"
 black = "\033[1;30;49m"
 white ="\033[1;37;49m"
 ansi_escape_seq = re.compile(r'\x1b[^m]*m')
+weak_protocols = ["SSLv1", "SSLv1.0", "SSLv2", "SSLv2.0", "SSLv3", "SSLv3.0", "TLSv1.0", "TLSv1.1"]
 
 def nmap(host):
     print("nmap")
 
 
-def sslscan(host, proxy):
+def sslscan(host):
     sslscan = subprocess.Popen(["sslscan", host], stdout=subprocess.PIPE, universal_newlines=True)
     
     sslscan_results = open("sslscan_results.txt", "w+")
@@ -30,7 +31,7 @@ def sslscan(host, proxy):
         if line == "" and sslscan.poll() is not None:
             break
         if line:
-            if re.search(r'TLS.+bits', line):
+            if re.search(r'TLS.+bits', line) or re.search(r'SSL.+bits', line):
                 line = ansi_escape_seq.sub('', line)
                 ciphersuite = line.split()[4].strip()
                 ciphers.add(ciphersuite)
@@ -62,30 +63,45 @@ def sslscan(host, proxy):
     os.remove("sslscan_results.txt")
 
 
-# checks for weak and insecure ciphers against ciphersuite.info api
-def weak_insecure_ciphers(ciphers):
-    weak_ciphers_response = requests.get("https://ciphersuite.info/api/cs/security/weak")
-    insecure_ciphers_response = requests.get("https://ciphersuite.info/api/cs/security/insecure")
-    weak_ciphers = json.loads(weak_ciphers_response.text)
-    insecure_ciphers = json.loads(insecure_ciphers_response.text)
+# checks for weak and insecure ciphers against ciphersuite.info api.
+# creates a local file with these ciphers if file doesn't exist for use when
+# on a network that needs a proxy to hit external sites.
+# ISSUE: doesn't have all the openssl names, have to use
+#        https://testssl.sh/openssl-iana.mapping.html
+def weak_insecure_ciphers(ciphers_to_check):
+    if not os.path.isfile("data.txt"):
+        weak_ciphers_response = requests.get("https://ciphersuite.info/api/cs/security/weak")
+        insecure_ciphers_response = requests.get("https://ciphersuite.info/api/cs/security/insecure")
+        
+        weak_cipher_data = json.loads(weak_ciphers_response.text.rstrip())["ciphersuites"]
+        ciphers = [list(k.keys())[0] for k in weak_cipher_data]
+        ciphers = [list(i.values())[0]["openssl_name"] for i in weak_cipher_data if list(i.values())[0]["openssl_name"]]
+        ciphers += [list(i.values())[0]["gnutls_name"] for i in weak_cipher_data if list(i.values())[0]["gnutls_name"]]
+        
+        insecure_cipher_data = json.loads(insecure_ciphers_response.text.rstrip())["ciphersuites"]
+        ciphers += [list(k.keys())[0] for k in insecure_cipher_data]
+        ciphers += [list(i.values())[0]["openssl_name"] for i in insecure_cipher_data if list(i.values())[0]["openssl_name"]]
+        ciphers += [list(i.values())[0]["gnutls_name"] for i in insecure_cipher_data if list(i.values())[0]["gnutls_name"]]
+        
+        with open("data.txt", "w") as ciphers_data:
+            ciphers_data.write("\n".join(ciphers))
+    
+    #ciphers = {"weak_ciphersuites": json.loads(weak_ciphers_response.text.rstrip())["ciphersuites"]}
+    #ciphers["insecure_ciphersuites"] = json.loads(insecure_ciphers_response.text.rstrip())["ciphersuites"]
+
+    #with open("data.txt", "w") as ciphers_data:
+    #    json.dump(weak_ciphers, ciphers_data)
 
     highlight = []
     found = False
     print("\n")
     spinner = Spinner("Checking for weak and insecure ciphers...")
-    for cipher in ciphers:
-        sleep(0.1)
+    with open("data.txt", "r") as ciphers_data:
+        all_ciphers = [i.rstrip() for i in ciphers_data]
+    for cipher in ciphers_to_check:
         spinner.next()
-        for i in weak_ciphers['ciphersuites']:
-            if re.search(r'\b' + cipher + r'\b', json.dumps(i)):
-                highlight.append(cipher)
-                found = True
-                break
-        if not found:
-            for i in insecure_ciphers['ciphersuites']:
-                if re.search(r'\b' + cipher + r'\b', json.dumps(i)):
-                    highlight.append(cipher)
-                    break
+        if cipher in all_ciphers:
+            highlight.append(cipher)
     return highlight
 
 
@@ -100,18 +116,18 @@ def ssl_weakness_check(line):
 
 def cipher_weakness_check(line, highlight):
     split_line = line.split()
-    tls = split_line[1]
+    protocol = split_line[1]
     bits = split_line[2]
     cipher = split_line[4]
     key_exchange = ""
     if len(split_line) >= 6:
         key_exchange = split_line[5]
-    if re.search(r'(TLSv1.0|TLSv1.1|SSL)', line) or (int(bits) < 128) or (cipher in highlight) or (key_exchange == "DHE 1024 bits"):
+    if protocol in weak_protocols or (int(bits) < 128) or (cipher in highlight) or (key_exchange == "DHE 1024 bits"):
         return True
     return False
 
 
-def sslyze(host, proxy):
+def sslyze(host):
     sslyze = ["sslyze", "--regular", host]
     proxy = input("Proxy?(y/n): ")
     if proxy == "y":
@@ -129,7 +145,7 @@ def sslyze(host, proxy):
         if line == "" and sslyze.poll() is not None:
             break
         if line:
-            if re.search(r'TLS.+bits', line):
+            if re.search(r'TLS.+bits', line) or re.search(r'SSL.+bits', line):
                 ciphersuite = line.split()[0].strip()
                 ciphers.add(ciphersuite)
             sslyze_results.write(line)
@@ -195,7 +211,7 @@ def draw_border(lines, sslyze_flag=False):
         if not sslyze_flag:
             length = len(ansi_escape_seq.sub('', line))
             space = " " * (78-length)
-        if re.search(r'TLS.*bits', line):
+        if re.search(r'TLS.*bits', line) or re.search(r'SSL.*bits', line):
             line = colour_keywords(line, sslyze_flag)
         draw += "{prepend_space}{colour}+{dash}+\n{prepend_space}| {default_colour}{line}{colour}{space} |\n{prepend_space}+{dash}+\n{default_colour}".format(prepend_space=prepend_space,dash=dash,space=space,line=line,colour=red,default_colour=white)
         print(draw, end="")
@@ -206,7 +222,7 @@ def draw_border(lines, sslyze_flag=False):
                 space = " " * (78-len(i))
                 i = colour_keywords(i, sslyze_flag)
             else:
-                if not re.search(r'TLS.*bits', i):
+                if not re.search(r'TLS.*bits', i) or not re.search(r'SSL.*bits', i):
                     space = " " * (len(dash)-len(i)-2)
                 else:
                     space = ""
@@ -217,12 +233,13 @@ def draw_border(lines, sslyze_flag=False):
 
 
 def colour_keywords(line, sslyze_flag):
-    if re.search(r'(TLSv1.0|TLSv1.1|SSL)', line):
-        index = line.find('TLS')
-        if not index:
-            index = line.find('SSL')
-        line = colour_keyword(line, index, 7)
-        
+    protocol = line.split()[0]
+    if not sslyze_flag:
+        protocol = line.split()[1]
+    if protocol in weak_protocols:
+        index = line.find(protocol)
+        line = colour_keyword(line, index, len(protocol))
+
     bits = line.split()[1]
     if not sslyze_flag:
         bits = line.split()[2]
@@ -254,15 +271,14 @@ if __name__ == "__main__":
     order = input("What would you like to order?:\n\n+{dash}+\n|{space_one}MENU{space_one}|\n+{dash}+\n| nmap portalicious sandwich (1) |\n| ssl spicy fries (2){space_two}|\n| nikto cola (3){space_three}|\n+{dash}+\n\nOrder me: ".format(dash="-"*32,space_one=" "*14,space_two=" "*12,space_three=" "*17))
     options = order.split(" ")
     host = input("Host?: ")
-    proxy = input("If you need a proxy to access external sites on this network, enter it now: ")
     if '1' in options:
         nmap(host)
     if '2' in options:
         sslyze_flag = input("Do you wanna use sslyze or nah (y/n)? ")
         if sslyze_flag == "y":
-            sslyze(host, proxy)
+            sslyze(host)
         else:
-            sslscan(host, proxy)
+            sslscan(host)
     if '3' in options:
         nikto(host)
 
