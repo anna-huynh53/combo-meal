@@ -2,7 +2,6 @@
 
 import os, re, subprocess
 import requests, json
-from time import sleep
 import pyfiglet
 from pyfiglet import Figlet
 from progress.spinner import Spinner
@@ -15,7 +14,28 @@ ansi_escape_seq = re.compile(r'\x1b[^m]*m')
 weak_protocols = ["SSLv1", "SSLv1.0", "SSLv2", "SSLv2.0", "SSLv3", "SSLv3.0", "TLSv1.0", "TLSv1.1"]
 
 def nmap(host):
-    print("nmap")
+    flags = ["sudo", "nmap", host]
+    inputs = input("What flags you want otherwise it's -Pn -sS -v: ")
+    if not inputs:
+        flags += ["-Pn", "-sS", "-v"]
+    nmap = subprocess.Popen(flags, stdout=subprocess.PIPE, universal_newlines=True)
+    
+    ports = []
+    spinner = Spinner("Nmapping host...")
+    while True:
+        spinner.next()
+        line = nmap.stdout.readline()
+        if line == "" and nmap.poll() is not None:
+            break
+        if line:
+            if re.search("/.*open", line):
+                ports.append(line.strip())
+    
+    print("\n\n+{dash}+\n|PORT     STATE     SERVICE|\n+{dash}+".format(dash="-"*26))
+    for p in ports:
+        items = p.split()
+        print("|{port}{space1}{state}{space2}{service}{space3}|".format(port=items[0],space1=" "*(9-len(items[0])),state=items[1],space2=" "*(10-len(items[1])),service=items[2],space3=" "*(7-len(items[2]))))
+    print("+{dash}+\n".format(dash="-"*26))     
 
 
 def sslscan(host):
@@ -25,7 +45,6 @@ def sslscan(host):
     ciphers = set()
     spinner = Spinner("Scanning host...")
     while True:
-        sleep(0.1)
         spinner.next()
         line = sslscan.stdout.readline()
         if line == "" and sslscan.poll() is not None:
@@ -128,18 +147,17 @@ def cipher_weakness_check(line, highlight):
 
 
 def sslyze(host):
-    sslyze = ["sslyze", "--regular", host]
+    flags = ["sslyze", "--regular", host]
     proxy = input("Proxy?(y/n): ")
     if proxy == "y":
          proxy_url = input("Format http://USER:PW@HOST:PORT/: ")
-         sslyze.append("https_tunnel={}".format(proxy_url))
-    sslyze = subprocess.Popen(sslyze, stdout=subprocess.PIPE, universal_newlines=True)
+         flags.append("https_tunnel={}".format(proxy_url))
+    sslyze = subprocess.Popen(flags, stdout=subprocess.PIPE, universal_newlines=True)
     
     sslyze_results = open("sslyze_results.txt", "w+")
     ciphers = set()
     spinner = Spinner("Scanning host...")
     while True:
-        sleep(0.1)
         spinner.next()
         line = sslyze.stdout.readline()
         if line == "" and sslyze.poll() is not None:
@@ -262,7 +280,8 @@ def colour_keyword(line, index, length):
 
 
 def nikto(host):
-    nikto = subprocess.Popen(["nikto", "-host", host, "-o", "nikto.txt"], stdout=subprocess.PIPE, universal_newlines=True)
+    with open("nikto.txt", "w+") as file:
+        nikto = subprocess.Popen(["nikto", "-host", host], stdout=file, stderr=subprocess.PIPE, universal_newlines=True)
 
 
 if __name__ == "__main__":
