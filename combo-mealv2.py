@@ -4,7 +4,9 @@ import os, re, subprocess
 import requests, json
 import pyfiglet
 from pyfiglet import Figlet
+from bs4 import BeautifulSoup
 from progress.spinner import Spinner
+
 
 red = "\033[1;31;49m"
 yellow = "\033[1;33;49m"
@@ -30,12 +32,14 @@ def nmap(host):
         if line:
             if re.search("/.*open", line):
                 ports.append(line.strip())
+    ports.append("55533/telnet closed fgdfdgdfgfdgdfgdfgdfd")
+    longest = len(sorted(ports, key=len)[-1])
     
-    print("\n\n+{dash}+\n|PORT     STATE     SERVICE|\n+{dash}+".format(dash="-"*26))
+    print("\n\n+{dash}+\n|PORT{space1}STATE{space2}SERVICE{space3}|\n+{dash}+".format(space1=" "*10,space2=" "*3,space3=" "*(longest-21),dash="-"*(longest+8)))
     for p in ports:
         items = p.split()
-        print("|{port}{space1}{state}{space2}{service}{space3}|".format(port=items[0],space1=" "*(9-len(items[0])),state=items[1],space2=" "*(10-len(items[1])),service=items[2],space3=" "*(7-len(items[2]))))
-    print("+{dash}+\n".format(dash="-"*26))     
+        print("|{port}{space1}{state}{space2}{service}{space3}|".format(port=items[0],space1=" "*(14-len(items[0])),state=items[1],space2=" "*(8-len(items[1])),service=items[2],space3=" "*(longest-len(items[2])-14)))
+    print("+{dash}+\n".format(dash="-"*(longest+8)))     
 
 
 def sslscan(host):
@@ -285,6 +289,11 @@ def nikto(host):
 
 
 if __name__ == "__main__":
+    ssl_mapping = requests.get("https://testssl.sh/openssl-iana.mapping.html")
+    #soup = BeautifulSoup(ssl_mapping.text, "lxml")
+    #grep "<td>" openssl.txt | sed 's/<\/*t.><\/*t.>//g;s/\[.*\]//g' | awk '{print $1,$NF}' | sort | uniq
+
+    """
     title = Figlet(font="slant")
     print(title.renderText("combo meal"))
     order = input("What would you like to order?:\n\n+{dash}+\n|{space_one}MENU{space_one}|\n+{dash}+\n| nmap portalicious sandwich (1) |\n| ssl spicy fries (2){space_two}|\n| nikto cola (3){space_three}|\n+{dash}+\n\nOrder me: ".format(dash="-"*32,space_one=" "*14,space_two=" "*12,space_three=" "*17))
@@ -300,6 +309,6 @@ if __name__ == "__main__":
             sslscan(host)
     if '3' in options:
         nikto(host)
-
+    """
 
 
