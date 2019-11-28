@@ -20,10 +20,11 @@ def nmap(host):
     inputs = input("What flags you want otherwise it's -Pn -sS -v: ")
     if not inputs:
         flags += ["-Pn", "-sS", "-v"]
-    nmap = subprocess.Popen(flags, stdout=subprocess.PIPE, universal_newlines=True)
+    # nmap = subprocess.Popen(flags, stdout=subprocess.PIPE, universal_newlines=True)
     
     ports = []
     spinner = Spinner("Nmapping host...")
+    """
     while True:
         spinner.next()
         line = nmap.stdout.readline()
@@ -32,14 +33,17 @@ def nmap(host):
         if line:
             if re.search("/.*open", line):
                 ports.append(line.strip())
-    ports.append("55533/telnet closed fgdfdgdfgfdgdfgdfgdfd")
-    longest = len(sorted(ports, key=len)[-1])
+    """
+    ports.append("4342/tr open fdsjfkldsfjkdsfj")
+    lengths = [29, len(host) + 6, len(sorted(ports, key=len)[-1]) + 9]
+    longest = sorted(lengths)[-1]
     
-    print("\n\n+{dash}+\n|PORT{space1}STATE{space2}SERVICE{space3}|\n+{dash}+".format(space1=" "*10,space2=" "*3,space3=" "*(longest-21),dash="-"*(longest+8)))
+    print("\n\n+{dash}+\n|Host: {host}{space1}|\n+{dash}+\n|PORT{space2}STATE{space3}SERVICE{space4}|\n+{dash}+".format(host=host,space1=" "*(longest-len(host)-4),space2=" "*10,space3=" "*3,space4=" "*(longest-27),dash="-"*(longest+2)))
     for p in ports:
         items = p.split()
-        print("|{port}{space1}{state}{space2}{service}{space3}|".format(port=items[0],space1=" "*(14-len(items[0])),state=items[1],space2=" "*(8-len(items[1])),service=items[2],space3=" "*(longest-len(items[2])-14)))
-    print("+{dash}+\n".format(dash="-"*(longest+8)))     
+        service = " ".join(items[2:])
+        print("|{port}{space1}{state}{space2}{service}{space3}|".format(port=items[0],space1=" "*(14-len(items[0])),state=items[1],space2=" "*(8-len(items[1])),service=service,space3=" "*(longest-len(service)-20)))
+    print("+{dash}+\n".format(dash="-"*(longest+2)))
 
 
 def sslscan(host):
@@ -62,7 +66,7 @@ def sslscan(host):
     sslscan_results.close()
     
     highlight = weak_insecure_ciphers(ciphers)
-
+    
     print("\n\nPrinting out results...\n")
     sslscan_results = open("sslscan_results.txt", "r")
     to_highlight = []
@@ -97,6 +101,7 @@ def weak_insecure_ciphers(ciphers_to_check):
         insecure_ciphers_response = requests.get("https://ciphersuite.info/api/cs/security/insecure")
         
         weak_cipher_data = json.loads(weak_ciphers_response.text.rstrip())["ciphersuites"]
+        # iana name
         ciphers = [list(k.keys())[0] for k in weak_cipher_data]
         ciphers = [list(i.values())[0]["openssl_name"] for i in weak_cipher_data if list(i.values())[0]["openssl_name"]]
         ciphers += [list(i.values())[0]["gnutls_name"] for i in weak_cipher_data if list(i.values())[0]["gnutls_name"]]
@@ -108,12 +113,6 @@ def weak_insecure_ciphers(ciphers_to_check):
         
         with open("data.txt", "w") as ciphers_data:
             ciphers_data.write("\n".join(ciphers))
-    
-    #ciphers = {"weak_ciphersuites": json.loads(weak_ciphers_response.text.rstrip())["ciphersuites"]}
-    #ciphers["insecure_ciphersuites"] = json.loads(insecure_ciphers_response.text.rstrip())["ciphersuites"]
-
-    #with open("data.txt", "w") as ciphers_data:
-    #    json.dump(weak_ciphers, ciphers_data)
 
     highlight = []
     found = False
@@ -289,10 +288,24 @@ def nikto(host):
 
 
 if __name__ == "__main__":
+    ciphers = {} # iana_name: openssl_name
+    # with open("file.txt", "w+") as file:
+    file = open("file.txt", "r")
     ssl_mapping = requests.get("https://testssl.sh/openssl-iana.mapping.html")
-    #soup = BeautifulSoup(ssl_mapping.text, "lxml")
-    #grep "<td>" openssl.txt | sed 's/<\/*t.><\/*t.>//g;s/\[.*\]//g' | awk '{print $1,$NF}' | sort | uniq
+    openssl = subprocess.Popen(["grep '<td>' openssl.txt | sed 's/<\/*t.><\/*t.>//g;s/\[.*\]//g' | awk '{print $1,$NF}' | sort | uniq > file.txt"], shell=True)
+    file.close()
+    
+    file = open("file.txt", "r")
+    for line in file:
+        l = line.split()
+        ciphers[l[1]] = l[0]
 
+    with open("data.txt", "r") as data:
+        for cipher in data:
+            cipher = cipher.rstrip()
+            if cipher in ciphers.keys():
+                print(ciphers.get(cipher))
+                
     """
     title = Figlet(font="slant")
     print(title.renderText("combo meal"))
