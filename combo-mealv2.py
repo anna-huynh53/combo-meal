@@ -48,7 +48,7 @@ def nmap(host):
 
 def sslscan(host):
     sslscan = subprocess.Popen(["sslscan", host], stdout=subprocess.PIPE, universal_newlines=True)
-    
+    print("fdsfsdfs")
     sslscan_results = open("sslscan_results.txt", "w+")
     ciphers = set()
     spinner = Spinner("Scanning host...")
@@ -66,7 +66,7 @@ def sslscan(host):
     sslscan_results.close()
     
     highlight = weak_insecure_ciphers(ciphers)
-    
+
     print("\n\nPrinting out results...\n")
     sslscan_results = open("sslscan_results.txt", "r")
     to_highlight = []
@@ -90,19 +90,22 @@ def sslscan(host):
     os.remove("sslscan_results.txt")
 
 
+
 # checks for weak and insecure ciphers against ciphersuite.info api.
 # creates a local file with these ciphers if file doesn't exist for use when
 # on a network that needs a proxy to hit external sites.
 # ISSUE: doesn't have all the openssl names, have to use
 #        https://testssl.sh/openssl-iana.mapping.html
 def weak_insecure_ciphers(ciphers_to_check):
-    if not os.path.isfile("data.txt"):
+    if not os.path.isfile("weak-cipher-suites-data.txt"):
         weak_ciphers_response = requests.get("https://ciphersuite.info/api/cs/security/weak")
         insecure_ciphers_response = requests.get("https://ciphersuite.info/api/cs/security/insecure")
+        openssl_iana_mapping = requests.get("https://testssl.sh/openssl-iana.mapping.html")
+        with open("openssl-iana-mapping.txt", "w+") as mappings:
+            mappings.write(openssl_iana_mapping.text)
         
         weak_cipher_data = json.loads(weak_ciphers_response.text.rstrip())["ciphersuites"]
-        # iana name
-        ciphers = [list(k.keys())[0] for k in weak_cipher_data]
+        ciphers = [list(k.keys())[0] for k in weak_cipher_data] # iana name
         ciphers = [list(i.values())[0]["openssl_name"] for i in weak_cipher_data if list(i.values())[0]["openssl_name"]]
         ciphers += [list(i.values())[0]["gnutls_name"] for i in weak_cipher_data if list(i.values())[0]["gnutls_name"]]
         
@@ -111,14 +114,31 @@ def weak_insecure_ciphers(ciphers_to_check):
         ciphers += [list(i.values())[0]["openssl_name"] for i in insecure_cipher_data if list(i.values())[0]["openssl_name"]]
         ciphers += [list(i.values())[0]["gnutls_name"] for i in insecure_cipher_data if list(i.values())[0]["gnutls_name"]]
         
-        with open("data.txt", "w") as ciphers_data:
-            ciphers_data.write("\n".join(ciphers))
+        cipher_mapping = {} # iana_name: openssl_name
+        openssl = subprocess.Popen(["grep '<td>' cipher-mappings.txt | sed 's/<\/*t.><\/*t.>//g;s/\[.*\]//g' | awk '{print $1,$NF}' | sort | uniq"], stdout=subprocess.PIPE, shell=True)
+        while True:
+            line = openssl.stdout.readline().decode('utf-8')
+            if line == "" and openssl.poll() is not None:
+                break
+            if line:
+                l = line.split()
+                cipher_mapping[l[1]] = l[0]
+        os.remove("openssl-iana-mapping.txt")
 
+        openssl_ciphers = []
+        for cipher in ciphers:
+            if cipher in cipher_mapping.keys():
+                openssl_ciphers.append(cipher_mapping.get(cipher))
+        
+        ciphers += openssl_ciphers
+        with open("weak-cipher-suites-data.txt", "w+") as data:
+            data.write("\n".join(ciphers))
+    
     highlight = []
     found = False
     print("\n")
     spinner = Spinner("Checking for weak and insecure ciphers...")
-    with open("data.txt", "r") as ciphers_data:
+    with open("weak-cipher-suites-data.txt", "r") as ciphers_data:
         all_ciphers = [i.rstrip() for i in ciphers_data]
     for cipher in ciphers_to_check:
         spinner.next()
@@ -288,25 +308,7 @@ def nikto(host):
 
 
 if __name__ == "__main__":
-    ciphers = {} # iana_name: openssl_name
-    # with open("file.txt", "w+") as file:
-    file = open("file.txt", "r")
-    ssl_mapping = requests.get("https://testssl.sh/openssl-iana.mapping.html")
-    openssl = subprocess.Popen(["grep '<td>' openssl.txt | sed 's/<\/*t.><\/*t.>//g;s/\[.*\]//g' | awk '{print $1,$NF}' | sort | uniq > file.txt"], shell=True)
-    file.close()
-    
-    file = open("file.txt", "r")
-    for line in file:
-        l = line.split()
-        ciphers[l[1]] = l[0]
 
-    with open("data.txt", "r") as data:
-        for cipher in data:
-            cipher = cipher.rstrip()
-            if cipher in ciphers.keys():
-                print(ciphers.get(cipher))
-                
-    """
     title = Figlet(font="slant")
     print(title.renderText("combo meal"))
     order = input("What would you like to order?:\n\n+{dash}+\n|{space_one}MENU{space_one}|\n+{dash}+\n| nmap portalicious sandwich (1) |\n| ssl spicy fries (2){space_two}|\n| nikto cola (3){space_three}|\n+{dash}+\n\nOrder me: ".format(dash="-"*32,space_one=" "*14,space_two=" "*12,space_three=" "*17))
@@ -322,6 +324,6 @@ if __name__ == "__main__":
             sslscan(host)
     if '3' in options:
         nikto(host)
-    """
+
 
 
