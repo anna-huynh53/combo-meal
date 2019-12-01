@@ -38,17 +38,21 @@ def nmap(host):
     lengths = [29, len(host) + 6, len(sorted(ports, key=len)[-1]) + 9]
     longest = sorted(lengths)[-1]
     
+    open_ports = []
     print("\n\n+{dash}+\n|Host: {host}{space1}|\n+{dash}+\n|PORT{space2}STATE{space3}SERVICE{space4}|\n+{dash}+".format(host=host,space1=" "*(longest-len(host)-4),space2=" "*10,space3=" "*3,space4=" "*(longest-27),dash="-"*(longest+2)))
     for p in ports:
         items = p.split()
         service = " ".join(items[2:])
         print("|{port}{space1}{state}{space2}{service}{space3}|".format(port=items[0],space1=" "*(14-len(items[0])),state=items[1],space2=" "*(8-len(items[1])),service=service,space3=" "*(longest-len(service)-20)))
+        open_ports.append(re.compile(r'/.*').sub('', items[0]))
     print("+{dash}+\n".format(dash="-"*(longest+2)))
+        
+    return open_ports
 
 
 def sslscan(host):
     sslscan = subprocess.Popen(["sslscan", host], stdout=subprocess.PIPE, universal_newlines=True)
-    print("fdsfsdfs")
+
     sslscan_results = open("sslscan_results.txt", "w+")
     ciphers = set()
     spinner = Spinner("Scanning host...")
@@ -136,12 +140,9 @@ def weak_insecure_ciphers(ciphers_to_check):
     
     highlight = []
     found = False
-    print("\n")
-    spinner = Spinner("Checking for weak and insecure ciphers...")
     with open("weak-cipher-suites-data.txt", "r") as ciphers_data:
         all_ciphers = [i.rstrip() for i in ciphers_data]
     for cipher in ciphers_to_check:
-        spinner.next()
         if cipher in all_ciphers:
             highlight.append(cipher)
     return highlight
@@ -170,27 +171,30 @@ def cipher_weakness_check(line, highlight):
 
 
 def sslyze(host):
-    flags = ["sslyze", "--regular", host]
+    flags = ["sslyze", "--hide_rejected_ciphers", "--http_get", host]
+    options = ["--reneg", "--compression", "--heartbleed", "--fallback", "--tlsv1_2", "--tlsv1_1", "--tlsv1", "--sslv3", "--sslv2"]
     proxy = input("Proxy?(y/n): ")
     if proxy == "y":
          proxy_url = input("Format http://USER:PW@HOST:PORT/: ")
          flags.append("https_tunnel={}".format(proxy_url))
-    sslyze = subprocess.Popen(flags, stdout=subprocess.PIPE, universal_newlines=True)
     
     sslyze_results = open("sslyze_results.txt", "w+")
     ciphers = set()
     spinner = Spinner("Scanning host...")
-    while True:
-        spinner.next()
-        line = sslyze.stdout.readline()
-        if line == "" and sslyze.poll() is not None:
-            break
-        if line:
-            if re.search(r'TLS.+bits', line) or re.search(r'SSL.+bits', line):
-                ciphersuite = line.split()[0].strip()
-                ciphers.add(ciphersuite)
-            sslyze_results.write(line)
+    for o in options:
+        sslyze = subprocess.Popen(flags + [o], stdout=subprocess.PIPE, universal_newlines=True)
+        while True:
+            spinner.next()
+            line = sslyze.stdout.readline()
+            if line == "" and sslyze.poll() is not None:
+                break
+            if line:   
+                if re.search(r'TLS.+bits', line) or re.search(r'SSL.+bits', line):
+                    ciphersuite = line.split()[0].strip()
+                    ciphers.add(ciphersuite)
+                sslyze_results.write(line)
     sslyze_results.close()
+    subprocess.call("sed -i 's/-*//g;/Plugin\|PLUGIN\|SCAN\|HOST\|=>/s/^.*$//;/^[[:space:]]*$/d' sslyze_results.txt", shell=True)
     
     highlight = weak_insecure_ciphers(ciphers)
 
@@ -243,10 +247,10 @@ def draw_border(lines, sslyze_flag=False):
         prepend_space = " " * 6
         dash = "-" * (len(lines[0])+2)
         if re.search(r'\*', lines[0]):
-            dash = "-" * (len(lines[5])+2)
+            dash = "-" * (len(lines[6])+2)
     else:
         dash = "-" * 80
-    
+
     if len(lines) == 1:
         line = lines[0]
         if not sslyze_flag:
@@ -263,7 +267,7 @@ def draw_border(lines, sslyze_flag=False):
                 space = " " * (78-len(i))
                 i = colour_keywords(i, sslyze_flag)
             else:
-                if not re.search(r'TLS.*bits', i) or not re.search(r'SSL.*bits', i):
+                if not re.search(r'TLS.*bits', i) and not re.search(r'SSL.*bits', i):
                     space = " " * (len(dash)-len(i)-2)
                 else:
                     space = ""
@@ -274,12 +278,11 @@ def draw_border(lines, sslyze_flag=False):
 
 
 def colour_keywords(line, sslyze_flag):
-    protocol = line.split()[0]
     if not sslyze_flag:
         protocol = line.split()[1]
-    if protocol in weak_protocols:
-        index = line.find(protocol)
-        line = colour_keyword(line, index, len(protocol))
+        if protocol in weak_protocols:
+            index = line.find(protocol)
+            line = colour_keyword(line, index, len(protocol))
 
     bits = line.split()[1]
     if not sslyze_flag:
@@ -291,9 +294,13 @@ def colour_keywords(line, sslyze_flag):
         line = colour_keyword(line, line.find('DHE 1024 bits'), 13)
 
     cipher = line.split()[0]
+    highlight = weak_insecure_ciphers(cipher.rstrip())
     if not sslyze_flag:
         cipher = line.split()[4]
-    line = colour_keyword(line, line.find(cipher), len(cipher))
+        line = colour_keyword(line, line.find(cipher), len(cipher))
+    else:
+        if cipher in highlight:
+            line = colour_keyword(line, line.find(cipher), len(cipher))
     
     return line
 
@@ -302,28 +309,30 @@ def colour_keyword(line, index, length):
     return line[:index] + yellow + line[index:index+length] + white + line[index+length:]
 
 
-def nikto(host):
-    with open("nikto.txt", "w+") as file:
-        nikto = subprocess.Popen(["nikto", "-host", host], stdout=file, stderr=subprocess.PIPE, universal_newlines=True)
+def nikto(host, open_ports):
+    if "80" in open_ports:
+        nikto = subprocess.call(["nikto", "-host", host, "-port", "80", "Save", "."], stdout=file, stderr=subprocess.PIPE, universal_newlines=True)
+          
+    nikto = subprocess.call(["nikto", "-host", host, "-port", "443", "Save", "."], stdout=file, stderr=subprocess.PIPE, universal_newlines=True)
 
 
 if __name__ == "__main__":
-
     title = Figlet(font="slant")
     print(title.renderText("combo meal"))
     order = input("What would you like to order?:\n\n+{dash}+\n|{space_one}MENU{space_one}|\n+{dash}+\n| nmap portalicious sandwich (1) |\n| ssl spicy fries (2){space_two}|\n| nikto cola (3){space_three}|\n+{dash}+\n\nOrder me: ".format(dash="-"*32,space_one=" "*14,space_two=" "*12,space_three=" "*17))
     options = order.split(" ")
     host = input("Host?: ")
+    open_ports = []
     if '1' in options:
-        nmap(host)
+        open_ports = nmap(host)
     if '2' in options:
-        sslyze_flag = input("Do you wanna use sslyze or nah (y/n)? ")
+        sslyze_flag = input("Do you wanna use sslyze or nah - use if proxy required (y/n)? ")
         if sslyze_flag == "y":
             sslyze(host)
         else:
             sslscan(host)
     if '3' in options:
-        nikto(host)
+        nikto(host, open_ports)
 
 
 
