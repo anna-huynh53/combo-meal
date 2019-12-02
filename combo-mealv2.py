@@ -119,7 +119,7 @@ def weak_insecure_ciphers(ciphers_to_check):
         ciphers += [list(i.values())[0]["gnutls_name"] for i in insecure_cipher_data if list(i.values())[0]["gnutls_name"]]
         
         cipher_mapping = {} # iana_name: openssl_name
-        openssl = subprocess.Popen(["grep '<td>' cipher-mappings.txt | sed 's/<\/*t.><\/*t.>//g;s/\[.*\]//g' | awk '{print $1,$NF}' | sort | uniq"], stdout=subprocess.PIPE, shell=True)
+        openssl = subprocess.Popen(["grep '<td>' openssl-iana-mapping.txt | sed 's/<\/*t.><\/*t.>//g;s/\[.*\]//g' | awk '{print $1,$NF}' | sort | uniq"], stdout=subprocess.PIPE, shell=True)
         while True:
             line = openssl.stdout.readline().decode('utf-8')
             if line == "" and openssl.poll() is not None:
@@ -127,7 +127,7 @@ def weak_insecure_ciphers(ciphers_to_check):
             if line:
                 l = line.split()
                 cipher_mapping[l[1]] = l[0]
-        os.remove("openssl-iana-mapping.txt")
+        #os.remove("openssl-iana-mapping.txt")
 
         openssl_ciphers = []
         for cipher in ciphers:
@@ -171,6 +171,7 @@ def cipher_weakness_check(line, highlight):
 
 
 def sslyze(host):
+    """
     flags = ["sslyze", "--hide_rejected_ciphers", "--http_get", host]
     options = ["--reneg", "--compression", "--heartbleed", "--fallback", "--tlsv1_2", "--tlsv1_1", "--tlsv1", "--sslv3", "--sslv2"]
     proxy = input("Proxy?(y/n): ")
@@ -195,8 +196,9 @@ def sslyze(host):
                 sslyze_results.write(line)
     sslyze_results.close()
     subprocess.call("sed -i 's/-*//g;/Plugin\|PLUGIN\|SCAN\|HOST\|=>/s/^.*$//;/^[[:space:]]*$/d' sslyze_results.txt", shell=True)
+    """
     
-    highlight = weak_insecure_ciphers(ciphers)
+    highlight = []#weak_insecure_ciphers(ciphers)
 
     print("\n\nPrinting out results...\n")
     sslyze_results = open("sslyze_results.txt", "r")
@@ -229,13 +231,15 @@ def sslyze(host):
                     draw_border(to_highlight, True)
                     to_highlight.clear()
                 print(line.rstrip())
+        elif re.search(r'VULNERABLE', line):
+            to_highlight.append(line.strip())
         else:
             if len(to_highlight) >= 1:
                 draw_border(to_highlight, True)
                 to_highlight.clear()
             print(line, end="")
     sslyze_results.close()
-    os.remove("sslyze_results.txt")
+    #os.remove("sslyze_results.txt")
 
 
 def draw_border(lines, sslyze_flag=False):
@@ -244,7 +248,7 @@ def draw_border(lines, sslyze_flag=False):
     dash = ""
     space = ""
     if sslyze_flag:
-        prepend_space = " " * 6
+        prepend_space = " " * 5
         dash = "-" * (len(lines[0])+2)
         if re.search(r'\*', lines[0]):
             dash = "-" * (len(lines[6])+2)
@@ -267,10 +271,8 @@ def draw_border(lines, sslyze_flag=False):
                 space = " " * (78-len(i))
                 i = colour_keywords(i, sslyze_flag)
             else:
-                if not re.search(r'TLS.*bits', i) and not re.search(r'SSL.*bits', i):
-                    space = " " * (len(dash)-len(i)-2)
-                else:
-                    space = ""
+                space = " " * (len(dash)-len(i)-2)
+                if re.search(r'V.*Cipher Suites', i) or re.search(r'TLS.*bits', i) or re.search(r'SSL.*bits', i):
                     i = colour_keywords(i, sslyze_flag)
             draw += "{prepend_space}{colour}| {default_colour}{line}{colour}{space} |\n{default_colour}".format(prepend_space=prepend_space,colour=red,default_colour=white,line=i,space=space)
         draw += "{prepend_space}{colour}+{dash}+{default_colour}".format(prepend_space=prepend_space,colour=red,default_colour=white,dash=dash)
@@ -283,6 +285,9 @@ def colour_keywords(line, sslyze_flag):
         if protocol in weak_protocols:
             index = line.find(protocol)
             line = colour_keyword(line, index, len(protocol))
+    if sslyze_flag and re.search(r'V.*Cipher Suites', line):
+        line = colour_keyword(line, 0, len(line))
+        return line
 
     bits = line.split()[1]
     if not sslyze_flag:
@@ -294,6 +299,7 @@ def colour_keywords(line, sslyze_flag):
         line = colour_keyword(line, line.find('DHE 1024 bits'), 13)
 
     cipher = line.split()[0]
+    # fix this line
     highlight = weak_insecure_ciphers(cipher.rstrip())
     if not sslyze_flag:
         cipher = line.split()[4]
@@ -319,13 +325,15 @@ def nikto(host, open_ports):
 if __name__ == "__main__":
     title = Figlet(font="slant")
     print(title.renderText("combo meal"))
-    order = input("What would you like to order?:\n\n+{dash}+\n|{space_one}MENU{space_one}|\n+{dash}+\n| nmap portalicious sandwich (1) |\n| ssl spicy fries (2){space_two}|\n| nikto cola (3){space_three}|\n+{dash}+\n\nOrder me: ".format(dash="-"*32,space_one=" "*14,space_two=" "*12,space_three=" "*17))
+    order = input("What would you like to order?:\n\n+{dash}+\n|{space_one}MENU{space_one}|\n+{dash}+\n| nmap portalicious sandwich (1) |\n| sslyze spicy fries (2){space_two}|\n| nikto cola (3){space_three}|\n+{dash}+\n\nOrder me: ".format(dash="-"*32,space_one=" "*14,space_two=" "*9,space_three=" "*17))
     options = order.split(" ")
     host = input("Host?: ")
+    proxy = input("Proxy required?: ")
     open_ports = []
     if '1' in options:
         open_ports = nmap(host)
     if '2' in options:
+        
         sslyze_flag = input("Do you wanna use sslyze or nah - use if proxy required (y/n)? ")
         if sslyze_flag == "y":
             sslyze(host)
