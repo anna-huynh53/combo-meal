@@ -80,14 +80,14 @@ def sslscan(host):
                 to_highlight.append(line.strip())
             else:
                 if len(to_highlight) >= 1:
-                    draw_border(to_highlight)
+                    draw_border(to_highlight, highlight)
                     to_highlight.clear()
                 print("  " + line, end="")
         elif ssl_weakness_check(line):
             to_highlight.append(line.strip())
         else:
             if len(to_highlight) >= 1:
-                draw_border(to_highlight)
+                draw_border(to_highlight, highlight)
                 to_highlight.clear()
             print(line, end="")
     sslscan_results.close()
@@ -212,7 +212,7 @@ def sslyze(host):
                 border_section = False
             elif re.search(r'\*', line):
                 to_highlight.pop()
-                draw_border(to_highlight, True)
+                draw_border(to_highlight, highlight, True)
                 to_highlight.clear()
                 border_section = False
             else:
@@ -228,21 +228,21 @@ def sslyze(host):
                 to_highlight.append(line.strip())
             else:
                 if len(to_highlight) >= 1:
-                    draw_border(to_highlight, True)
+                    draw_border(to_highlight, highlight, True)
                     to_highlight.clear()
                 print(line.rstrip())
         elif re.search(r'VULNERABLE', line):
             to_highlight.append(line.strip())
         else:
             if len(to_highlight) >= 1:
-                draw_border(to_highlight, True)
+                draw_border(to_highlight, highlight, True)
                 to_highlight.clear()
             print(line, end="")
     sslyze_results.close()
     #os.remove("sslyze_results.txt")
 
 
-def draw_border(lines, sslyze_flag=False):
+def draw_border(lines, highlight, sslyze_flag=False):
     draw = ""
     prepend_space = ""
     dash = ""
@@ -261,7 +261,7 @@ def draw_border(lines, sslyze_flag=False):
             length = len(ansi_escape_seq.sub('', line))
             space = " " * (78-length)
         if re.search(r'TLS.*bits', line) or re.search(r'SSL.*bits', line):
-            line = colour_keywords(line, sslyze_flag)
+            line = colour_keywords(line, highlight, sslyze_flag)
         draw += "{prepend_space}{colour}+{dash}+\n{prepend_space}| {default_colour}{line}{colour}{space} |\n{prepend_space}+{dash}+\n{default_colour}".format(prepend_space=prepend_space,dash=dash,space=space,line=line,colour=red,default_colour=white)
         print(draw, end="")
     else:
@@ -269,17 +269,17 @@ def draw_border(lines, sslyze_flag=False):
         for i in lines:
             if not sslyze_flag:
                 space = " " * (78-len(i))
-                i = colour_keywords(i, sslyze_flag)
+                i = colour_keywords(i, highlight, sslyze_flag)
             else:
                 space = " " * (len(dash)-len(i)-2)
                 if re.search(r'V.*Cipher Suites', i) or re.search(r'TLS.*bits', i) or re.search(r'SSL.*bits', i):
-                    i = colour_keywords(i, sslyze_flag)
+                    i = colour_keywords(i, highlight, sslyze_flag)
             draw += "{prepend_space}{colour}| {default_colour}{line}{colour}{space} |\n{default_colour}".format(prepend_space=prepend_space,colour=red,default_colour=white,line=i,space=space)
         draw += "{prepend_space}{colour}+{dash}+{default_colour}".format(prepend_space=prepend_space,colour=red,default_colour=white,dash=dash)
         print(draw)
 
 
-def colour_keywords(line, sslyze_flag):
+def colour_keywords(line, highlight, sslyze_flag):
     if not sslyze_flag:
         protocol = line.split()[1]
         if protocol in weak_protocols:
@@ -299,14 +299,10 @@ def colour_keywords(line, sslyze_flag):
         line = colour_keyword(line, line.find('DHE 1024 bits'), 13)
 
     cipher = line.split()[0]
-    # fix this line
-    highlight = weak_insecure_ciphers(cipher.rstrip())
     if not sslyze_flag:
         cipher = line.split()[4]
+    if cipher in highlight:
         line = colour_keyword(line, line.find(cipher), len(cipher))
-    else:
-        if cipher in highlight:
-            line = colour_keyword(line, line.find(cipher), len(cipher))
     
     return line
 
@@ -333,12 +329,15 @@ if __name__ == "__main__":
     if '1' in options:
         open_ports = nmap(host)
     if '2' in options:
-        
-        sslyze_flag = input("Do you wanna use sslyze or nah - use if proxy required (y/n)? ")
-        if sslyze_flag == "y":
+        if host:
+            print("an order of sslyze fries coming up")
             sslyze(host)
-        else:
-            sslscan(host)
+         else:
+            sslyze_flag = input("Do you wanna use sslyze or nah (y/n)? ")
+            if sslyze_flag == "y":
+                sslyze(host)
+            else:
+                sslscan(host)
     if '3' in options:
         nikto(host, open_ports)
 
