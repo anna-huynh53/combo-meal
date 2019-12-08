@@ -1,12 +1,10 @@
 #!/usr/bin/python3
 
-import os, re, subprocess
+import os, subprocess, re
 import requests, json
 import pyfiglet
 from pyfiglet import Figlet
-from bs4 import BeautifulSoup
 from progress.spinner import Spinner
-
 
 red = "\033[1;31;49m"
 yellow = "\033[1;33;49m"
@@ -14,17 +12,18 @@ black = "\033[1;30;49m"
 white ="\033[1;37;49m"
 ansi_escape_seq = re.compile(r'\x1b[^m]*m')
 weak_protocols = ["SSLv1", "SSLv1.0", "SSLv2", "SSLv2.0", "SSLv3", "SSLv3.0", "TLSv1.0", "TLSv1.1"]
+weak_key_exchanges = ["DHE 1024 bits"]
 
-def nmap(host):
+def nmap(host, user_flags):
     flags = ["sudo", "nmap", host]
-    inputs = input("What flags you want otherwise it's -Pn -sS -v: ")
-    if not inputs:
+    if user_flags:
+        flags += user_flags
+    else:
         flags += ["-Pn", "-sS", "-v"]
-    # nmap = subprocess.Popen(flags, stdout=subprocess.PIPE, universal_newlines=True)
+    nmap = subprocess.Popen(flags, stdout=subprocess.PIPE, universal_newlines=True)
     
     ports = []
     spinner = Spinner("Nmapping host...")
-    """
     while True:
         spinner.next()
         line = nmap.stdout.readline()
@@ -33,11 +32,12 @@ def nmap(host):
         if line:
             if re.search("/.*open", line):
                 ports.append(line.strip())
-    """
-    ports.append("4342/tr open fdsjfkldsfjkdsfj")
+
+    # for printing out results
     lengths = [29, len(host) + 6, len(sorted(ports, key=len)[-1]) + 9]
     longest = sorted(lengths)[-1]
     
+    # if port 80 and/or 443 is open and nikto is also called, will nikto those ports
     open_ports = []
     print("\n\n+{dash}+\n|Host: {host}{space1}|\n+{dash}+\n|PORT{space2}STATE{space3}SERVICE{space4}|\n+{dash}+".format(host=host,space1=" "*(longest-len(host)-4),space2=" "*10,space3=" "*3,space4=" "*(longest-27),dash="-"*(longest+2)))
     for p in ports:
@@ -53,81 +53,79 @@ def nmap(host):
 def sslscan(host):
     sslscan = subprocess.Popen(["sslscan", host], stdout=subprocess.PIPE, universal_newlines=True)
 
-    sslscan_results = open("sslscan_results.txt", "w+")
-    ciphers = set()
+    ciphersuites = set()
     spinner = Spinner("Scanning host...")
-    while True:
-        spinner.next()
-        line = sslscan.stdout.readline()
-        if line == "" and sslscan.poll() is not None:
-            break
-        if line:
-            if re.search(r'TLS.+bits', line) or re.search(r'SSL.+bits', line):
-                line = ansi_escape_seq.sub('', line)
-                ciphersuite = line.split()[4].strip()
-                ciphers.add(ciphersuite)
-            sslscan_results.write(line)
-    sslscan_results.close()
+    with open("sslscan_results.txt", "w+") as sslscan_results:
+        while True:
+            spinner.next()
+            line = sslscan.stdout.readline()
+            if line == "" and sslscan.poll() is not None:
+                break
+            if line:
+                if re.search(r'TLS.+bits', line) or re.search(r'SSL.+bits', line):
+                    # strips the colour from the line
+                    line = ansi_escape_seq.sub('', line)
+                    ciphersuite = line.split()[4].strip()
+                    ciphersuites.add(ciphersuite)
+                sslscan_results.write(line)
     
-    highlight = weak_insecure_ciphers(ciphers)
+    highlight = weak_insecure_ciphers(ciphersuites)
 
-    print("\n\nPrinting out results...\n")
-    sslscan_results = open("sslscan_results.txt", "r")
     to_highlight = []
-    for line in sslscan_results:
-        if re.search(r'bits', line):
-            if cipher_weakness_check(line, highlight):
+    print("\n\nPrinting out results...\n")
+    with open("sslscan_results.txt", "r") as sslscan_results:
+        for line in sslscan_results:
+            if re.search(r'bits', line):
+                if cipher_weakness_check(line, highlight):
+                    to_highlight.append(line.strip())
+                else:
+                    if len(to_highlight) >= 1:
+                        draw_border(to_highlight, highlight)
+                        to_highlight.clear()
+                    print("  " + line, end="")
+            elif ssl_weakness_check(line):
                 to_highlight.append(line.strip())
             else:
                 if len(to_highlight) >= 1:
                     draw_border(to_highlight, highlight)
                     to_highlight.clear()
-                print("  " + line, end="")
-        elif ssl_weakness_check(line):
-            to_highlight.append(line.strip())
-        else:
-            if len(to_highlight) >= 1:
-                draw_border(to_highlight, highlight)
-                to_highlight.clear()
-            print(line, end="")
-    sslscan_results.close()
+                print(line, end="")
     os.remove("sslscan_results.txt")
 
 
-
-# checks for weak and insecure ciphers against ciphersuite.info api.
+# checks for weak and insecure ciphers using the ciphersuite.info api.
+# as this api does not list all the openssl names, maps the iana names to
+# openssl names using https://testssl.sh/openssl-iana.mapping.html.
 # creates a local file with these ciphers if file doesn't exist for use when
 # on a network that needs a proxy to hit external sites.
-# ISSUE: doesn't have all the openssl names, have to use
-#        https://testssl.sh/openssl-iana.mapping.html
 def weak_insecure_ciphers(ciphers_to_check):
     if not os.path.isfile("weak-cipher-suites-data.txt"):
         weak_ciphers_response = requests.get("https://ciphersuite.info/api/cs/security/weak")
         insecure_ciphers_response = requests.get("https://ciphersuite.info/api/cs/security/insecure")
-        openssl_iana_mapping = requests.get("https://testssl.sh/openssl-iana.mapping.html")
-        with open("openssl-iana-mapping.txt", "w+") as mappings:
-            mappings.write(openssl_iana_mapping.text)
         
-        weak_cipher_data = json.loads(weak_ciphers_response.text.rstrip())["ciphersuites"]
+        weak_cipher_data = json.loads(weak_ciphers_response.text.strip())["ciphersuites"]
         ciphers = [list(k.keys())[0] for k in weak_cipher_data] # iana name
         ciphers = [list(i.values())[0]["openssl_name"] for i in weak_cipher_data if list(i.values())[0]["openssl_name"]]
         ciphers += [list(i.values())[0]["gnutls_name"] for i in weak_cipher_data if list(i.values())[0]["gnutls_name"]]
         
-        insecure_cipher_data = json.loads(insecure_ciphers_response.text.rstrip())["ciphersuites"]
+        insecure_cipher_data = json.loads(insecure_ciphers_response.text.strip())["ciphersuites"]
         ciphers += [list(k.keys())[0] for k in insecure_cipher_data]
         ciphers += [list(i.values())[0]["openssl_name"] for i in insecure_cipher_data if list(i.values())[0]["openssl_name"]]
         ciphers += [list(i.values())[0]["gnutls_name"] for i in insecure_cipher_data if list(i.values())[0]["gnutls_name"]]
         
+        iana_openssl_mapping = requests.get("https://testssl.sh/openssl-iana.mapping.html")
+        with open("iana-openssl-mapping.txt", "w+") as mappings:
+            mappings.write(iana_openssl_mapping.text)
         cipher_mapping = {} # iana_name: openssl_name
-        openssl = subprocess.Popen(["grep '<td>' openssl-iana-mapping.txt | sed 's/<\/*t.><\/*t.>//g;s/\[.*\]//g' | awk '{print $1,$NF}' | sort | uniq"], stdout=subprocess.PIPE, shell=True)
+        openssl = subprocess.Popen(["grep '<td>' iana-openssl-mapping.txt | sed 's/<\/*t.><\/*t.>//g;s/\[.*\]//g' | awk '{print $1,$NF}' | sort | uniq"], stdout=subprocess.PIPE, shell=True)
         while True:
             line = openssl.stdout.readline().decode('utf-8')
             if line == "" and openssl.poll() is not None:
                 break
             if line:
-                l = line.split()
-                cipher_mapping[l[1]] = l[0]
-        #os.remove("openssl-iana-mapping.txt")
+                split_line = line.split()
+                cipher_mapping[split_line[1]] = split_line[0]
+        os.remove("iana-openssl-mapping.txt")
 
         openssl_ciphers = []
         for cipher in ciphers:
@@ -135,26 +133,17 @@ def weak_insecure_ciphers(ciphers_to_check):
                 openssl_ciphers.append(cipher_mapping.get(cipher))
         
         ciphers += openssl_ciphers
-        with open("weak-cipher-suites-data.txt", "w+") as data:
+        with open("weak-ciphersuites-data.txt", "w+") as data:
             data.write("\n".join(ciphers))
     
     highlight = []
     found = False
-    with open("weak-cipher-suites-data.txt", "r") as ciphers_data:
-        all_ciphers = [i.rstrip() for i in ciphers_data]
+    with open("weak-ciphersuites-data.txt", "r") as ciphers_data:
+        all_ciphers = [i.strip() for i in ciphers_data]
     for cipher in ciphers_to_check:
         if cipher in all_ciphers:
             highlight.append(cipher)
     return highlight
-
-
-def ssl_weakness_check(line):
-    result = False
-    if re.search(r'not.*TLS Fallback SCSV', line) or re.search(r'Compression.*enabled', line) or re.search(r'Insecure.*session renegotiation', line):
-        result = True
-    if (re.search(r'Secure Algorithm', line) or re.search(r'Key Strength', line) or re.search(r'Not valid', line)) and red in line:
-        result = True
-    return result
 
 
 def cipher_weakness_check(line, highlight):
@@ -165,81 +154,87 @@ def cipher_weakness_check(line, highlight):
     key_exchange = ""
     if len(split_line) >= 6:
         key_exchange = split_line[5]
-    if protocol in weak_protocols or (int(bits) < 128) or (cipher in highlight) or (key_exchange == "DHE 1024 bits"):
+    if protocol in weak_protocols or (int(bits) < 128) or (cipher in highlight) or (key_exchange in weak_key_exchanges):
         return True
     return False
 
 
-def sslyze(host):
-    """
-    flags = ["sslyze", "--hide_rejected_ciphers", "--http_get", host]
-    options = ["--reneg", "--compression", "--heartbleed", "--fallback", "--tlsv1_2", "--tlsv1_1", "--tlsv1", "--sslv3", "--sslv2"]
-    proxy = input("Proxy?(y/n): ")
-    if proxy == "y":
-         proxy_url = input("Format http://USER:PW@HOST:PORT/: ")
-         flags.append("https_tunnel={}".format(proxy_url))
-    
-    sslyze_results = open("sslyze_results.txt", "w+")
-    ciphers = set()
-    spinner = Spinner("Scanning host...")
-    for o in options:
-        sslyze = subprocess.Popen(flags + [o], stdout=subprocess.PIPE, universal_newlines=True)
-        while True:
-            spinner.next()
-            line = sslyze.stdout.readline()
-            if line == "" and sslyze.poll() is not None:
-                break
-            if line:   
-                if re.search(r'TLS.+bits', line) or re.search(r'SSL.+bits', line):
-                    ciphersuite = line.split()[0].strip()
-                    ciphers.add(ciphersuite)
-                sslyze_results.write(line)
-    sslyze_results.close()
-    subprocess.call("sed -i 's/-*//g;/Plugin\|PLUGIN\|SCAN\|HOST\|=>/s/^.*$//;/^[[:space:]]*$/d' sslyze_results.txt", shell=True)
-    """
-    
-    highlight = []#weak_insecure_ciphers(ciphers)
+# should probably fix this
+def ssl_weakness_check(line):
+    result = False
+    if re.search(r'not.*TLS Fallback SCSV', line) or re.search(r'Insecure session renegotiation', line) or re.search(r'Compression enabled', line) or re.search(r'[0-9] vulnerable to heartbleed', line):
+        result = True
+    if (re.search(r'Secure Algorithm', line) or re.search(r'Key Strength', line) or re.search(r'Not valid', line)) and red in line:
+        result = True
+    return result
 
-    print("\n\nPrinting out results...\n")
-    sslyze_results = open("sslyze_results.txt", "r")
+
+def sslyze(host, user_flags):
+    flags = ["sslyze", "--hide_rejected_ciphers", "--http_get", host]
+    options = ["--fallback", "--reneg", "--compression", "--heartbleed", "--tlsv1_2", "--tlsv1_1", "--tlsv1", "--sslv3", "--sslv2"]
+    if user_flags:
+        flags += user_flags
+    
+    ciphersuites = set()
+    spinner = Spinner("Scanning host...")
+    with open("sslyze_results.txt", "w+") as sslyze_results:
+        for o in options:
+            sslyze = subprocess.Popen(flags.append(o), stdout=subprocess.PIPE, universal_newlines=True)
+            while True:
+                spinner.next()
+                line = sslyze.stdout.readline()
+                if line == "" and sslyze.poll() is not None:
+                    break
+                if line:   
+                    if re.search(r'TLS.+bits', line) or re.search(r'SSL.+bits', line):
+                        ciphersuite = line.split()[0].strip()
+                        ciphersuites.add(ciphersuite)
+                    sslyze_results.write(line)
+    # as calling each flag individually for order instead of sorting out file after,
+    # need to remove lines that are prepended and appended for each scan called
+    subprocess.call("sed -i 's/-*//g;/Plugin\|PLUGIN\|SCAN\|HOST\|=>/s/^.*$//;/^[[:space:]]*$/d' sslyze_results.txt", shell=True)
+    
+    highlight = weak_insecure_ciphers(ciphersuites)
+    
     to_highlight = []
     border_section = False
-    for line in sslyze_results:
-        if border_section:
-            if re.search(r'rejected', line):
-                print(to_highlight[0])
-                to_highlight.clear()
-                border_section = False
-            elif re.search(r'\*', line):
-                to_highlight.pop()
-                draw_border(to_highlight, highlight, True)
-                to_highlight.clear()
-                border_section = False
-            else:
+    print("\n\nPrinting out results...\n")
+    with open("sslyze_results.txt", "r") as sslyze_results:
+        for line in sslyze_results:
+            if border_section:
+                if re.search(r'rejected', line):
+                    print(to_highlight[0])
+                    to_highlight.clear()
+                    border_section = False
+                elif re.search(r'\*', line):
+                    to_highlight.pop()
+                    draw_border(to_highlight, highlight, True)
+                    to_highlight.clear()
+                    border_section = False
+                else:
+                    to_highlight.append(line.strip())
+                    continue
+            if re.search(r'\* (TLSV1|TLSV1_1|SSLV.*) Cipher Suites', line):
                 to_highlight.append(line.strip())
+                border_section = True
                 continue
-        if re.search(r'\* (TLSV1|TLSV1_1|SSLV.*) Cipher Suites', line):
-            to_highlight.append(line.strip())
-            border_section = True
-            continue
-        if re.search(r'bits', line):
-            c = line.split()[0].strip()
-            if c in highlight:
+            if re.search(r'bits', line):
+                c = line.split()[0].strip()
+                if c in highlight:
+                    to_highlight.append(line.strip())
+                else:
+                    if len(to_highlight) >= 1:
+                        draw_border(to_highlight, highlight, True)
+                        to_highlight.clear()
+                    print(line.strip())
+            elif re.search(r'VULNERABLE', line):
                 to_highlight.append(line.strip())
             else:
                 if len(to_highlight) >= 1:
                     draw_border(to_highlight, highlight, True)
                     to_highlight.clear()
-                print(line.rstrip())
-        elif re.search(r'VULNERABLE', line):
-            to_highlight.append(line.strip())
-        else:
-            if len(to_highlight) >= 1:
-                draw_border(to_highlight, highlight, True)
-                to_highlight.clear()
-            print(line, end="")
-    sslyze_results.close()
-    #os.remove("sslyze_results.txt")
+                print(line, end="")
+    os.remove("sslyze_results.txt")
 
 
 def draw_border(lines, highlight, sslyze_flag=False):
@@ -312,10 +307,14 @@ def colour_keyword(line, index, length):
 
 
 def nikto(host, open_ports):
-    if "80" in open_ports:
-        nikto = subprocess.call(["nikto", "-host", host, "-port", "80", "Save", "."], stdout=file, stderr=subprocess.PIPE, universal_newlines=True)
-          
-    nikto = subprocess.call(["nikto", "-host", host, "-port", "443", "Save", "."], stdout=file, stderr=subprocess.PIPE, universal_newlines=True)
+    with open(re.compile(r'://').sub('-', host)+".txt", "w+") as file:
+        nikto = subprocess.call(["nikto", "-host", host], stdout=file)
+    if "80" in open_ports and re.search(r'https://', host):
+        with open("http-"+host+".txt", "w+") as file:
+            nikto = subprocess.call(["nikto", "-host", host, "-port", "80"], stdout=file)
+    if "443" in open_ports and re.search(r'http://', host):
+        with open("https-"+host+".txt", "w+") as file:
+            nikto = subprocess.call(["nikto", "-host", host, "-port", "443"], stdout=file)  
 
 
 if __name__ == "__main__":
@@ -323,23 +322,33 @@ if __name__ == "__main__":
     print(title.renderText("combo meal"))
     order = input("What would you like to order?:\n\n+{dash}+\n|{space_one}MENU{space_one}|\n+{dash}+\n| nmap portalicious sandwich (1) |\n| sslyze spicy fries (2){space_two}|\n| nikto cola (3){space_three}|\n+{dash}+\n\nOrder me: ".format(dash="-"*32,space_one=" "*14,space_two=" "*9,space_three=" "*17))
     options = order.split(" ")
-    host = input("Host?: ")
-    proxy = input("Proxy required?: ")
+    host = input("Host? (e.g. https://www.example.com): ")
+    nmap_flags = []
+    sslyze_flags = []
     open_ports = []
     if '1' in options:
-        open_ports = nmap(host)
+        nmap_flags = input("NMAP: What flags you want otherwise it's -Pn -sS -v: ")
     if '2' in options:
-        if host:
-            print("an order of sslyze fries coming up")
-            sslyze(host)
-         else:
-            sslyze_flag = input("Do you wanna use sslyze or nah (y/n)? ")
-            if sslyze_flag == "y":
-                sslyze(host)
-            else:
-                sslscan(host)
+        sslyze_flag = input("SSLSCAN: Do you wanna use sslyze or nah - choose if you need to proxy (y/n)? ") 
+        if sslyze_flag == "y":
+            proxy_url = input("         Format http://USER:PW@HOST:PORT/: ")
+            sslyze_flags.append("https_tunnel={proxy}".format(proxy=proxy_url))
+    if '1' in options:
+        open_ports = nmap(host, nmap_flags)
+    if '2' in options:
+        if sslyze_flags:
+            sslyze(host, sslyze_flags)
+        else:
+            sslscan(host)
     if '3' in options:
         nikto(host, open_ports)
+
+
+# to do or not to do
+def help_menu():
+    print("Wow, there's a help menu. How helpful.")
+    print("When choosing what to order, you can choose any combo of the menu, separated by a space e.g. 1 3, 3 2 1")
+    print("-h     This is the only flag to bring up this menu.")
 
 
 
