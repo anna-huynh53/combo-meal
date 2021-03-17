@@ -1,11 +1,17 @@
 #!/usr/bin/python3
 
+import argparse
 import os, subprocess, re
 import requests, json
-import pyfiglet
-from pyfiglet import Figlet
 from progress.spinner import Spinner
 
+title = """
+                        __                                  __
+  _________  ____ ___  / /_  ____     ____ ___  ___  ____ _/ /
+ / ___/ __ \/ __ `__ \/ __ \/ __ \   / __ `__ \/ _ \/ __ `/ / 
+/ /__/ /_/ / / / / / / /_/ / /_/ /  / / / / / /  __/ /_/ / /  
+\___/\____/_/ /_/ /_/_.___/\____/  /_/ /_/ /_/\___/\__,_/_/  
+""" 
 red = "\033[1;31;49m"
 yellow = "\033[1;33;49m"
 black = "\033[1;30;49m"
@@ -69,21 +75,21 @@ def sslscan(host):
                     ciphersuites.add(ciphersuite)
                 sslscan_results.write(line)
     
-    highlight = weak_insecure_ciphers(ciphersuites)
+    highlight = get_weak_insecure_ciphers(ciphersuites)
 
     to_highlight = []
     print("\n\nPrinting out results...\n")
     with open("sslscan_results.txt", "r") as sslscan_results:
         for line in sslscan_results:
             if re.search(r'bits', line):
-                if cipher_weakness_check(line, highlight):
+                if check_weak_cipher(line, highlight):
                     to_highlight.append(line.strip())
                 else:
                     if len(to_highlight) >= 1:
                         draw_border(to_highlight, highlight)
                         to_highlight.clear()
                     print("  " + line, end="")
-            elif ssl_weakness_check(line):
+            elif check_weak_ssl(line):
                 to_highlight.append(line.strip())
             else:
                 if len(to_highlight) >= 1:
@@ -98,7 +104,7 @@ def sslscan(host):
 # openssl names using https://testssl.sh/openssl-iana.mapping.html.
 # creates a local file with these ciphers if file doesn't exist for use when
 # on a network that needs a proxy to hit external sites.
-def weak_insecure_ciphers(ciphers_to_check):
+def get_weak_insecure_ciphers(ciphers_to_check):
     if not os.path.isfile("weak-cipher-suites-data.txt"):
         weak_ciphers_response = requests.get("https://ciphersuite.info/api/cs/security/weak")
         insecure_ciphers_response = requests.get("https://ciphersuite.info/api/cs/security/insecure")
@@ -125,28 +131,30 @@ def weak_insecure_ciphers(ciphers_to_check):
             if line:
                 split_line = line.split()
                 cipher_mapping[split_line[1]] = split_line[0]
-        os.remove("iana-openssl-mapping.txt")
+                cipher_mapping[split_line[0]] = split_line[1]
+        #os.remove("iana-openssl-mapping.txt")
 
         openssl_ciphers = []
         for cipher in ciphers:
             if cipher in cipher_mapping.keys():
-                openssl_ciphers.append(cipher_mapping.get(cipher))
+                if cipher_mapping.get(cipher):
+                    openssl_ciphers.append(cipher_mapping.get(cipher))
         
         ciphers += openssl_ciphers
-        with open("weak-ciphersuites-data.txt", "w+") as data:
+        with open("weak-cipher-suites-data.txt", "w+") as data:
             data.write("\n".join(ciphers))
     
     highlight = []
     found = False
-    with open("weak-ciphersuites-data.txt", "r") as ciphers_data:
+    with open("weak-cipher-suites-data.txt", "r") as ciphers_data:
         all_ciphers = [i.strip() for i in ciphers_data]
     for cipher in ciphers_to_check:
-        if cipher in all_ciphers:
+        if cipher in all_ciphers or re.search(r'SHA$', cipher):
             highlight.append(cipher)
     return highlight
 
 
-def cipher_weakness_check(line, highlight):
+def check_weak_cipher(line, highlight):
     split_line = line.split()
     protocol = split_line[1]
     bits = split_line[2]
@@ -160,7 +168,7 @@ def cipher_weakness_check(line, highlight):
 
 
 # should probably fix this
-def ssl_weakness_check(line):
+def check_weak_ssl(line):
     result = False
     if re.search(r'not.*TLS Fallback SCSV', line) or re.search(r'Insecure session renegotiation', line) or re.search(r'Compression enabled', line) or re.search(r'[0-9] vulnerable to heartbleed', line):
         result = True
@@ -179,7 +187,7 @@ def sslyze(host, user_flags):
     spinner = Spinner("Scanning host...")
     with open("sslyze_results.txt", "w+") as sslyze_results:
         for o in options:
-            sslyze = subprocess.Popen(flags.append(o), stdout=subprocess.PIPE, universal_newlines=True)
+            sslyze = subprocess.Popen(flags + [o], stdout=subprocess.PIPE, universal_newlines=True)
             while True:
                 spinner.next()
                 line = sslyze.stdout.readline()
@@ -194,7 +202,7 @@ def sslyze(host, user_flags):
     # need to remove lines that are prepended and appended for each scan called
     subprocess.call("sed -i 's/-*//g;/Plugin\|PLUGIN\|SCAN\|HOST\|=>/s/^.*$//;/^[[:space:]]*$/d' sslyze_results.txt", shell=True)
     
-    highlight = weak_insecure_ciphers(ciphersuites)
+    highlight = get_weak_insecure_ciphers(ciphersuites)
     
     to_highlight = []
     border_section = False
@@ -318,10 +326,10 @@ def nikto(host, open_ports):
 
 
 if __name__ == "__main__":
-    title = Figlet(font="slant")
-    print(title.renderText("combo meal"))
+    print(title)
     order = input("What would you like to order?:\n\n+{dash}+\n|{space_one}MENU{space_one}|\n+{dash}+\n| nmap portalicious sandwich (1) |\n| sslyze spicy fries (2){space_two}|\n| nikto cola (3){space_three}|\n+{dash}+\n\nOrder me: ".format(dash="-"*32,space_one=" "*14,space_two=" "*9,space_three=" "*17))
     options = order.split(" ")
+    
     host = input("Host? (e.g. https://www.example.com): ")
     nmap_flags = []
     sslyze_flags = []
@@ -349,6 +357,5 @@ def help_menu():
     print("Wow, there's a help menu. How helpful.")
     print("When choosing what to order, you can choose any combo of the menu, separated by a space e.g. 1 3, 3 2 1")
     print("-h     This is the only flag to bring up this menu.")
-
 
 
