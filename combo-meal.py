@@ -99,11 +99,9 @@ def sslscan(host):
     os.remove("sslscan_results.txt")
 
 
-# checks for weak and insecure ciphers using the ciphersuite.info api.
-# as this api does not list all the openssl names, maps the iana names to
-# openssl names using https://testssl.sh/openssl-iana.mapping.html.
-# creates a local file with these ciphers if file doesn't exist for use when
-# on a network that needs a proxy to hit external sites.
+# checks for weak and insecure ciphers using the ciphersuite.info api
+# as this api does not list all the openssl names, maps the iana names to openssl names using https://testssl.sh/openssl-iana.mapping.html
+# creates a local file with these ciphers if file doesn't exist for use when on a network that needs a proxy to hit external sites
 def get_weak_insecure_ciphers(ciphers_to_check):
     if not os.path.isfile("weak-cipher-suites-data.txt"):
         weak_ciphers_response = requests.get("https://ciphersuite.info/api/cs/security/weak")
@@ -167,7 +165,6 @@ def check_weak_cipher(line, highlight):
     return False
 
 
-# should probably fix this
 def check_weak_ssl(line):
     result = False
     if re.search(r'not.*TLS Fallback SCSV', line) or re.search(r'Insecure session renegotiation', line) or re.search(r'Compression enabled', line) or re.search(r'[0-9] vulnerable to heartbleed', line):
